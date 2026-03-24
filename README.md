@@ -34,6 +34,7 @@ Supported multiplexers:
 - [cmux](https://github.com/manaflow-ai/cmux)
 - [tmux](https://github.com/tmux/tmux)
 - [zellij](https://zellij.dev)
+- [zmx](https://zmx.sh)
 
 Start pi inside one of them:
 
@@ -43,9 +44,11 @@ cmux pi
 tmux new -A -s pi 'pi'
 # or
 zellij --session pi   # then run: pi
+# or (zmx — no wrapper needed, just have zmx installed)
+pi
 ```
 
-Optional: set `PI_SUBAGENT_MUX=cmux|tmux|zellij` to force a specific backend.
+Optional: set `PI_SUBAGENT_MUX=cmux|tmux|zellij|zmx` to force a specific backend.
 
 ## What's Included
 
@@ -336,6 +339,7 @@ Every sub-agent session displays a compact tools widget showing available and de
   - [cmux](https://github.com/manaflow-ai/cmux)
   - [tmux](https://github.com/tmux/tmux)
   - [zellij](https://zellij.dev)
+  - [zmx](https://zmx.sh)
 
 ```bash
 cmux pi
@@ -343,12 +347,14 @@ cmux pi
 tmux new -A -s pi 'pi'
 # or
 zellij --session pi   # then run: pi
+# or (zmx — no wrapper needed, just have zmx installed)
+pi
 ```
 
 Optional backend override:
 
 ```bash
-export PI_SUBAGENT_MUX=cmux   # or tmux, zellij
+export PI_SUBAGENT_MUX=cmux   # or tmux, zellij, zmx
 ```
 
 ## License

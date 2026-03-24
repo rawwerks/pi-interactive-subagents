@@ -647,11 +647,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       description:
         "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
         "Returns immediately — the agent runs in the background and steers results back when done. " +
-        "Supports cmux, tmux, and zellij.",
+        "Supports cmux, tmux, zellij, and zmx.",
       promptSnippet:
         "Spawn a sub-agent in a dedicated terminal multiplexer pane. " +
         "Returns immediately — the agent runs in the background and steers results back when done. " +
-        "Supports cmux, tmux, and zellij.",
+        "Supports cmux, tmux, zellij, and zmx.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
-export type MuxBackend = "cmux" | "tmux" | "zellij";
+export type MuxBackend = "cmux" | "tmux" | "zellij" | "zmx";
 
 const commandAvailability = new Map<string, boolean>();
 
@@ -29,7 +29,7 @@ function hasCommand(command: string): boolean {
 
 function muxPreference(): MuxBackend | null {
   const pref = (process.env.PI_SUBAGENT_MUX ?? "").trim().toLowerCase();
-  if (pref === "cmux" || pref === "tmux" || pref === "zellij") return pref;
+  if (pref === "cmux" || pref === "tmux" || pref === "zellij" || pref === "zmx") return pref;
   return null;
 }
 
@@ -45,6 +45,14 @@ function isZellijRuntimeAvailable(): boolean {
   return !!(process.env.ZELLIJ || process.env.ZELLIJ_SESSION_NAME) && hasCommand("zellij");
 }
 
+/**
+ * zmx is session-based (no panes/splits). Unlike tmux/zellij you don't need
+ * to be "inside" zmx to create sessions — the binary is enough.
+ */
+function isZmxRuntimeAvailable(): boolean {
+  return hasCommand("zmx");
+}
+
 export function isCmuxAvailable(): boolean {
   return isCmuxRuntimeAvailable();
 }
@@ -57,15 +65,21 @@ export function isZellijAvailable(): boolean {
   return isZellijRuntimeAvailable();
 }
 
+export function isZmxAvailable(): boolean {
+  return isZmxRuntimeAvailable();
+}
+
 export function getMuxBackend(): MuxBackend | null {
   const pref = muxPreference();
   if (pref === "cmux") return isCmuxRuntimeAvailable() ? "cmux" : null;
   if (pref === "tmux") return isTmuxRuntimeAvailable() ? "tmux" : null;
   if (pref === "zellij") return isZellijRuntimeAvailable() ? "zellij" : null;
+  if (pref === "zmx") return isZmxRuntimeAvailable() ? "zmx" : null;
 
   if (isCmuxRuntimeAvailable()) return "cmux";
   if (isTmuxRuntimeAvailable()) return "tmux";
   if (isZellijRuntimeAvailable()) return "zellij";
+  if (isZmxRuntimeAvailable()) return "zmx";
   return null;
 }
 
@@ -84,7 +98,10 @@ export function muxSetupHint(): string {
   if (pref === "zellij") {
     return "Start pi inside zellij (`zellij --session pi`, then run `pi`).";
   }
-  return "Start pi inside cmux (`cmux pi`), tmux (`tmux new -A -s pi 'pi'`), or zellij (`zellij --session pi`, then run `pi`).";
+  if (pref === "zmx") {
+    return "Install zmx (`brew install neurosnap/tap/zmx` or https://zmx.sh).";
+  }
+  return "Start pi inside cmux (`cmux pi`), tmux (`tmux new -A -s pi 'pi'`), zellij (`zellij --session pi`, then run `pi`), or install zmx (`zmx`).";
 }
 
 function requireMuxBackend(): MuxBackend {
@@ -119,6 +136,10 @@ function tailLines(text: string, lines: number): string {
   const split = text.split("\n");
   if (split.length <= lines) return text;
   return split.slice(-lines).join("\n");
+}
+
+function zmxSessionName(surface: string): string {
+  return surface.startsWith("zmx:") ? surface.slice("zmx:".length) : surface;
 }
 
 function zellijPaneId(surface: string): string {
@@ -178,6 +199,16 @@ export function createSurfaceSplit(
   fromSurface?: string,
 ): string {
   const backend = requireMuxBackend();
+
+  // zmx is session-based — no panes/splits. Each subagent gets its own session.
+  if (backend === "zmx") {
+    const sanitized = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 30);
+    const sessionName = `pi-sub-${sanitized}-${Date.now().toString(36)}`;
+    // Create an empty shell session. Passing empty stdin avoids hanging on
+    // stdin read while still triggering session creation.
+    execFileSync("zmx", ["run", sessionName], { input: "", encoding: "utf8" });
+    return `zmx:${sessionName}`;
+  }
 
   if (backend === "cmux") {
     const surfaceArg = fromSurface ? ` --surface ${shellEscape(fromSurface)}` : "";
@@ -281,6 +312,9 @@ export function createSurfaceSplit(
 export function renameCurrentTab(title: string): void {
   const backend = requireMuxBackend();
 
+  // zmx sessions don't have tabs/windows — no-op.
+  if (backend === "zmx") return;
+
   if (backend === "cmux") {
     const surfaceId = process.env.CMUX_SURFACE_ID;
     if (!surfaceId) throw new Error("CMUX_SURFACE_ID not set");
@@ -308,6 +342,9 @@ export function renameCurrentTab(title: string): void {
  */
 export function renameWorkspace(title: string): void {
   const backend = requireMuxBackend();
+
+  // zmx sessions don't have workspaces — no-op.
+  if (backend === "zmx") return;
 
   if (backend === "cmux") {
     execSync(`cmux workspace-action --action rename --title ${shellEscape(title)}`, {
@@ -343,6 +380,14 @@ export function renameWorkspace(title: string): void {
 export function sendCommand(surface: string, command: string): void {
   const backend = requireMuxBackend();
 
+  // zmx: pipe command via stdin to avoid shell-quoting issues with long commands.
+  // zmx run reads stdin, replaces trailing \n with \r, and writes to the session PTY.
+  if (backend === "zmx") {
+    const session = zmxSessionName(surface);
+    execFileSync("zmx", ["run", session], { input: command + "\n", encoding: "utf8" });
+    return;
+  }
+
   if (backend === "cmux") {
     execSync(`cmux send --surface ${shellEscape(surface)} ${shellEscape(command + "\n")}`, {
       encoding: "utf8",
@@ -365,6 +410,12 @@ export function sendCommand(surface: string, command: string): void {
  */
 export function readScreen(surface: string, lines = 50): string {
   const backend = requireMuxBackend();
+
+  if (backend === "zmx") {
+    const session = zmxSessionName(surface);
+    const out = execFileSync("zmx", ["history", session], { encoding: "utf8" });
+    return tailLines(out, lines);
+  }
 
   if (backend === "cmux") {
     return execSync(`cmux read-screen --surface ${shellEscape(surface)} --lines ${lines}`, {
@@ -402,6 +453,12 @@ export function readScreen(surface: string, lines = 50): string {
  */
 export async function readScreenAsync(surface: string, lines = 50): Promise<string> {
   const backend = requireMuxBackend();
+
+  if (backend === "zmx") {
+    const session = zmxSessionName(surface);
+    const { stdout } = await execFileAsync("zmx", ["history", session], { encoding: "utf8" });
+    return tailLines(stdout, lines);
+  }
 
   if (backend === "cmux") {
     const { stdout } = await execFileAsync(
@@ -441,6 +498,16 @@ export async function readScreenAsync(surface: string, lines = 50): Promise<stri
  */
 export function closeSurface(surface: string): void {
   const backend = requireMuxBackend();
+
+  if (backend === "zmx") {
+    const session = zmxSessionName(surface);
+    try {
+      execFileSync("zmx", ["kill", session], { encoding: "utf8" });
+    } catch {
+      // Session may have already exited.
+    }
+    return;
+  }
 
   if (backend === "cmux") {
     execSync(`cmux close-surface --surface ${shellEscape(surface)}`, {
