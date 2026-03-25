@@ -1,4 +1,4 @@
-import { execSync, execFile, execFileSync } from "node:child_process";
+import { execSync, execFile, execFileSync, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -201,12 +201,18 @@ export function createSurfaceSplit(
   const backend = requireMuxBackend();
 
   // zmx is session-based — no panes/splits. Each subagent gets its own session.
+  // IMPORTANT: `zmx run` forks a daemon for new sessions. The daemon inherits
+  // Node's stdio pipes which prevents Node from ever seeing EOF → hangs forever.
+  // Fix: use stdio:'ignore' so the daemon has no pipes to hold open.
+  // We send a harmless `true` command so zmx creates the session + shell, then
+  // sendCommand() can pipe the real command via stdin to the existing session.
   if (backend === "zmx") {
     const sanitized = name.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 30);
     const sessionName = `pi-sub-${sanitized}-${Date.now().toString(36)}`;
-    // Create an empty shell session. Passing empty stdin avoids hanging on
-    // stdin read while still triggering session creation.
-    execFileSync("zmx", ["run", sessionName], { input: "", encoding: "utf8" });
+    const result = spawnSync("zmx", ["run", sessionName, "true"], { stdio: "ignore", timeout: 10000 });
+    if (result.error) {
+      throw new Error(`Failed to create zmx session: ${result.error.message}`);
+    }
     return `zmx:${sessionName}`;
   }
 
@@ -382,9 +388,18 @@ export function sendCommand(surface: string, command: string): void {
 
   // zmx: pipe command via stdin to avoid shell-quoting issues with long commands.
   // zmx run reads stdin, replaces trailing \n with \r, and writes to the session PTY.
+  // The session already exists (created by createSurface), so zmx connects to the
+  // daemon via socket without forking — piped stdio is safe here.
   if (backend === "zmx") {
     const session = zmxSessionName(surface);
-    execFileSync("zmx", ["run", session], { input: command + "\n", encoding: "utf8" });
+    const result = spawnSync("zmx", ["run", session], {
+      input: command + "\n",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 10000,
+    });
+    if (result.error) {
+      throw new Error(`Failed to send command to zmx session: ${result.error.message}`);
+    }
     return;
   }
 
